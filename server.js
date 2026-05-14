@@ -9,6 +9,30 @@ const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const app = express();
 app.use(cors());
+
+// Webhook must come before json middleware to get raw body
+app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  const sig = req.headers['stripe-signature'];
+
+  let event;
+  try {
+    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+
+  if (event.type === 'checkout.session.completed') {
+    const session = event.data.object;
+    const userId = session.metadata.userId;
+
+    const { createClient } = await import('@supabase/supabase-js');
+    const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
+    await supabase.from('users').update({ is_pro: true }).eq('id', userId);
+  }
+
+  res.json({ received: true });
+});
+
 app.use(express.json({ limit: '10mb' }));
 
 app.post('/identify', async (req, res) => {
@@ -65,28 +89,6 @@ app.post('/create-checkout', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
-});
-
-app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
-  const sig = req.headers['stripe-signature'];
-
-  let event;
-  try {
-    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
-  } catch (err) {
-    return res.status(400).json({ error: err.message });
-  }
-
-  if (event.type === 'checkout.session.completed') {
-    const session = event.data.object;
-    const userId = session.metadata.userId;
-
-    const { createClient } = await import('@supabase/supabase-js');
-    const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
-    await supabase.from('users').update({ is_pro: true }).eq('id', userId);
-  }
-
-  res.json({ received: true });
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
